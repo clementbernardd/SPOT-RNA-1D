@@ -4,7 +4,6 @@ import tensorflow as tf
 import numpy as np
 import os, argparse, tqdm
 import time
-start = time.time()
 from argparse import RawTextHelpFormatter
 
 start = time.time()
@@ -41,8 +40,7 @@ with open(args.seq_file) as file:
     input_data = [line.strip() for line in file.read().splitlines() if line.strip()]
 count = int(len(input_data)/2)  # count number of input sequences
 
-ids = [''.join(e if e.isalnum() else '_' for e in input_data[2*i].replace(">", "")) for i in range(count)]   # name of each input sequence after ignoring by special characters.
-
+ids = [''.join(e for e in input_data[2*i].replace(">", "")) for i in range(count)]   # name of each input sequence after ignoring by special characters.
 ###### extracting all the input sequences  #############
 sequences = {}
 for i,I in enumerate(ids):
@@ -62,7 +60,8 @@ os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.ERROR)
 
 if args.gpu == -1:
-	config = tf.ConfigProto(intra_op_parallelism_threads=args.cpu, inter_op_parallelism_threads=args.cpu)
+	#config = tf.ConfigProto(intra_op_parallelism_threads=args.cpu, inter_op_parallelism_threads=args.cpu)
+	config = tf.compat.v1.ConfigProto(intra_op_parallelism_threads=args.cpu, inter_op_parallelism_threads=args.cpu)
 else:
 	config = tf.compat.v1.ConfigProto()
 	config.allow_soft_placement=True
@@ -107,15 +106,44 @@ with tf.compat.v1.Session(config=config) as sess:
             outputs[id] = pred_angles[i,0:seq_lens[i]]
 tf.compat.v1.reset_default_graph()
 
+import json
+def save_json(content, path: str):
+    """Save the dictionary into a json file.
+    Args
+    :param content: the object to save
+    :param path: the path where to save. Could have .json or not in the path
+    """
+    assert(type(content) is dict)
+    if path.endswith(".json"):
+        path_to_save = path
+    else:
+        path_to_save = path + ".json"
+    with open(path_to_save, "w") as file:
+        json.dump(content, file)
+
+def convert_output_to_json(final_output):
+    sequence = ''.join(final_output[:,1])
+    columns = ['alpha','beta','gamma','delta','epsilon','zeta','chi','eta','theta']
+    output = {'sequence' : sequence, 'angles' : {}}
+    for i in range(2, final_output.shape[1]):
+        angles = list(final_output[:,i])
+        angles = [float(i) for i in angles]
+        output['angles'][columns[i-2]] = angles
+    return output
+
+
+
+json_output = {}
 for id in ids:
 
-	seq = np.array([[i,I] for i,I in enumerate(sequences[id])])
-
-	preds = outputs[id] * 2 - 1
-	preds_angle_rad = [np.arctan2(preds[:,2*i], preds[:,2*i+1]) for i in range(int(preds.shape[1]/2))]
-	preds_angle = np.round(np.transpose(np.degrees(preds_angle_rad)), 2)
-	final_output =  np.concatenate((seq, preds_angle), axis=1)
-	np.savetxt(os.path.join(args.save_outputs, str(id.split('.')[0]))+'.txt', (final_output), delimiter='\t\t', fmt="%s", header='No.\t   Seq\t\t Alpha\t\t Beta\t\tGamma\t\tDelta\t\t Epsilon\t Zeta\t\t  Chi\t\t  Eta\t\t Theta' + '\n', comments='')
+    seq = np.array([[i,I] for i,I in enumerate(sequences[id])])
+    preds = outputs[id] * 2 - 1
+    preds_angle_rad = [np.arctan2(preds[:,2*i], preds[:,2*i+1]) for i in range(int(preds.shape[1]/2))]
+    preds_angle = np.round(np.transpose(np.degrees(preds_angle_rad)), 2)
+    final_output = np.concatenate((seq, preds_angle), axis=1)
+    output = convert_output_to_json(final_output)
+    json_output[id] = output
+save_json(json_output, args.save_outputs)
 
 print(bcolors.GREEN + '\nFinished!' + bcolors.RESET)
 print(bcolors.GREEN + 'SPOT-RNA-1D prediction saved in folder ' + args.save_outputs + bcolors.RESET)
